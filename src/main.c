@@ -11,6 +11,21 @@
 #include <zephyr/devicetree.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/drivers/uart.h>
+#include <zephyr/drivers/gpio.h>
+
+// GPIO Defines
+#define SLEEP_TIME_MS 10 * 60 * 1000
+static const struct gpio_dt_spec button0 = GPIO_DT_SPEC_GET(DT_ALIAS(sw0), gpios);
+static const struct gpio_dt_spec led0 = GPIO_DT_SPEC_GET(DT_ALIAS(led0), gpios);
+
+// Button press callback
+void button_pressed(const struct device *dev, struct gpio_callback *cb, uint32_t pins)
+{
+	gpio_pin_toggle_dt(&led0);
+}
+
+static struct gpio_callback button_cb_data;
+
 
 LOG_MODULE_REGISTER(app);
 
@@ -150,6 +165,31 @@ static void async(const struct device *lpuart)
 
 int main(void)
 {
+	// GPIO Setup
+	int ret;
+	if (!device_is_ready(led0.port)) {
+		return -1;
+	}
+
+    if (!device_is_ready(button0.port)) {
+		return -1;
+	}
+
+    ret = gpio_pin_configure_dt(&led0, GPIO_OUTPUT_ACTIVE);
+    if (ret < 0) {
+		return -1;
+	}
+
+    ret = gpio_pin_configure_dt(&button0, GPIO_INPUT);
+    if (ret < 0) {
+		return -1;
+    }
+
+    ret = gpio_pin_interrupt_configure_dt(&button0, GPIO_INT_EDGE_TO_ACTIVE);
+    gpio_init_callback(&button_cb_data, button_pressed, BIT(button0.pin));
+    gpio_add_callback(button0.port, &button_cb_data);
+
+	//UART setup
 	const struct device *lpuart = DEVICE_DT_GET(DT_NODELABEL(lpuart));
 
 	__ASSERT(device_is_ready(lpuart), "LPUART device not ready");
