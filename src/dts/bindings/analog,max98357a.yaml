@@ -1,0 +1,5 @@
+description: Analog Devices 3W I2S Amplifier
+
+compatible: "analog,max98357a"
+
+include: i2c-device.yaml

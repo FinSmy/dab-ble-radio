@@ -1,0 +1,4 @@
+source "Kconfig.zephyr"
+
+config I2C
+	default $(dt_compat_on_bus,$(DT_COMPAT_ANALOG_MAX98357),i2c)
