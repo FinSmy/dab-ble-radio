@@ -1,8 +1,33 @@
 #include <stdio.h>
 #include <zephyr/kernel.h>
 #include <zephyr/drivers/i2s.h>
+#include <zephyr/drivers/gpio.h>
 #include <zephyr/sys/iterable_sections.h>
+
+// Set up hardware
+#define LED0_NODE DT_ALIAS(led0)
+#define LED1_NODE DT_ALIAS(led1)
+
+static const struct gpio_dt_spec led0 = GPIO_DT_SPEC_GET(LED0_NODE, gpios);
+static const struct gpio_dt_spec led1 = GPIO_DT_SPEC_GET(LED1_NODE, gpios);
  
+// Create timer to periodically pack i2s queue
+static void i2s_pack_isr(struct k_timer *dummy)
+{
+	static bool flip = true;
+	if (flip)
+	{
+		gpio_pin_toggle_dt(&led0);
+	} else
+	{
+		gpio_pin_toggle_dt(&led1);
+	}
+	
+	flip = !flip;
+}
+
+K_TIMER_DEFINE(i2s_pack_timer, i2s_pack_isr, NULL);
+
 #define SAMPLE_NO 64
  
 /* The data represent a sine wave */
@@ -23,14 +48,11 @@ static int16_t data[SAMPLE_NO] = {
  */
 static void fill_buf(int16_t *tx_block, int att)
 {
- int r_idx;
-
  for (int i = 0; i < SAMPLE_NO; i++) {
 	 /* Left channel is sine wave */
 	 tx_block[2 * i] = data[i] / (1 << att);
 	 /* Right channel is same sine wave, shifted by 90 degrees */
-	 r_idx = (i + (ARRAY_SIZE(data) / 4)) % ARRAY_SIZE(data);
-	 tx_block[2 * i + 1] = data[r_idx] / (1 << att);
+	 tx_block[2 * i + 1] = data[i] / (1 << att);
  }
 }
  
@@ -50,8 +72,24 @@ static STRUCT_SECTION_ITERABLE(k_mem_slab, tx_0_mem_slab) =
  Z_MEM_SLAB_INITIALIZER(tx_0_mem_slab, _k_mem_slab_buf_tx_0_mem_slab,
 			 WB_UP(BLOCK_SIZE), NUM_BLOCKS);
  
+
 int main(void)
 {
+	int ret_led;
+	if (!gpio_is_ready_dt(&led0)) {
+		return 0;
+	}
+
+	ret_led = gpio_pin_configure_dt(&led0, GPIO_OUTPUT_ACTIVE);
+	if (ret_led < 0) {
+		return 0;
+	}
+	ret_led = gpio_pin_configure_dt(&led1, GPIO_OUTPUT_ACTIVE);
+	if (ret_led < 0) {
+		return 0;
+	}
+	k_timer_start(&i2s_pack_timer, K_MSEC(500), K_MSEC(500)/* K_MSEC(1 * BLOCK_SIZE) */);
+
 	void *tx_block[NUM_BLOCKS];
 	struct i2s_config i2s_cfg;
 	int ret;
@@ -87,7 +125,7 @@ int main(void)
 			printf("Failed to allocate TX block\n");
 			return ret;
 		}
-		fill_buf((uint16_t *)tx_block[tx_idx], tx_idx % 3);
+		fill_buf((uint16_t *)tx_block[tx_idx], 2);
 	}
 
 	tx_idx = 0;
@@ -104,8 +142,10 @@ int main(void)
 		return ret;
 	}
 
-	for (; tx_idx < NUM_BLOCKS; ) {
-		ret = i2s_write(dev_i2s, tx_block[tx_idx++], BLOCK_SIZE);
+	for (; tx_idx < NUM_BLOCKS * 10000; ) {
+		ret = i2s_write(dev_i2s, (tx_block[tx_idx]), BLOCK_SIZE);
+		tx_idx = (tx_idx+1)%2;
+		fill_buf((uint16_t *)tx_block[tx_idx], 2);
 		if (ret < 0) {
 			printf("Could not write TX buffer %d\n", tx_idx);
 			return ret;
