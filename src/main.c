@@ -1,171 +1,102 @@
-#include <stdio.h>
+#include <string.h>
+#include <nrf.h>
 #include <zephyr/kernel.h>
+#include <zephyr/device.h>
 #include <zephyr/drivers/i2s.h>
 #include <zephyr/drivers/gpio.h>
-#include <zephyr/sys/iterable_sections.h>
 
-#define NUM_BLOCKS 20
-#define SAMPLE_NO 64
-#define BLOCK_SIZE (2 * sizeof(data))
-void *tx_block[NUM_BLOCKS];
- 
-#ifdef CONFIG_NOCACHE_MEMORY
- #define MEM_SLAB_CACHE_ATTR __nocache
-#else
- #define MEM_SLAB_CACHE_ATTR
-#endif /* CONFIG_NOCACHE_MEMORY */
+/* Prepare for 32 sample values */
+#define NUM_SAMPLES 32
 
-/* The data represent a sine wave */
-static int16_t data[SAMPLE_NO] = {
-	1,   2,   3,  4,  5,  6,  7,  8,
-   25329,  27244,  28897,  30272,  31356,  32137,  32609,  32767,
-   32609,  32137,  31356,  30272,  28897,  27244,  25329,  23169,
-   20787,  18204,  15446,  12539,   9511,   6392,   3211,      0,
-   -3212,  -6393,  -9512, -12540, -15447, -18205, -20788, -23170,
-  -25330, -27245, -28898, -30273, -31357, -32138, -32610, -32767,
-  -32610, -32138, -31357, -30273, -28898, -27245, -25330, -23170,
-  -20788, -18205, -15447, -12540,  -9512,  -6393,  -3212,     -1,
+/* Sine Wave Sample */
+static int16_t data_frame[NUM_SAMPLES] = {
+	  6392,  12539,  18204,  23169,  27244,  30272,  32137,  32767,  32137,
+	 30272,  27244,  23169,  18204,  12539,   6392,      0,  -6393, -12540,
+	-18205, -23170, -27245, -30273, -32138, -32767, -32138, -30273, -27245,
+	-23170, -18205, -12540,  -6393,     -1,
 };
 
-// Set up hardware
-#define LED0_NODE DT_ALIAS(led0)
-#define LED1_NODE DT_ALIAS(led1)
+/* The size of the memory block should be a multiple of data_frame size */
+#define BLOCK_SIZE (2 * sizeof(data_frame))
 
-static const struct gpio_dt_spec led0 = GPIO_DT_SPEC_GET(LED0_NODE, gpios);
-static const struct gpio_dt_spec led1 = GPIO_DT_SPEC_GET(LED1_NODE, gpios);
-const struct device *dev_i2s = DEVICE_DT_GET(DT_NODELABEL(i2s_rxtx));
-size_t num_in_buf = 0;
-uint32_t tx_idx;
-int fill_idx = 0;
+/* The number of memory blocks in a slab has to be at least 2 per queue */
+#define NUM_BLOCKS 5
 
-/* Fill buffer with sine wave on left channel, and sine wave shifted by
- * 90 degrees on right channel. "att" represents a power of two to attenuate
- * the samples by
- */
-static void fill_buf(int16_t *tx_block, int att)
-{
- for (int i = 0; i < SAMPLE_NO; i++) {
-	 /* Left channel is sine wave */
-	 tx_block[2 * i] = data[i] / (1 << att);
-	 /* Right channel is same sine wave, shifted by 90 degrees */
-	 tx_block[2 * i + 1] = data[i] / (1 << att);
- }
-}
+/* Define a new Memory Slab which consistes of NUM_BLOCKS blocks
+   __________________________________________________________________________
+  |    Block 0   |    Block 1   |    Block 2   |    Block 3   |    Block 4   |
+  |    0...31    |    0...31    |    0...31    |    0...31    |    0...31    |
+  |______________|______________|______________|______________|______________|
+*/
+static K_MEM_SLAB_DEFINE(mem_slab, BLOCK_SIZE, NUM_BLOCKS, NUM_SAMPLES);
 
-// Create timer to periodically pack i2s queue
-static void i2s_pack_isr(struct k_timer *dummy)
-{
-	// static int flip = 0;
-	// if (flip % 50 == 0)
-	// {
-	// 	gpio_pin_toggle_dt(&led0);
-	// } else
-	// {
-	// 	gpio_pin_toggle_dt(&led1);
-	// }
-	// flip = (flip + 1) % 2500;
-	int ret = i2s_trigger(dev_i2s, I2S_DIR_TX, I2S_TRIGGER_START);
-	if (ret < 0) {
-		printf("Could not trigger I2S tx\n");
-	}
-	
-	ret = i2s_write(dev_i2s, (tx_block[tx_idx]), BLOCK_SIZE);
-	tx_idx = (tx_idx + 1) % NUM_BLOCKS;
-	if (ret < 0) {
-		printf("Could not write TX buffer %d\n", tx_idx);
+void main(void) {
+	/* Get I2S device from the devicetree */
+	const struct device *i2s_dev = DEVICE_DT_GET(DT_NODELABEL(i2s_rxtx));
+	if (!device_is_ready(i2s_dev)) {
+		printk("%s is not ready\n", i2s_dev->name);
+		return;
 	}
 
-	fill_buf((uint16_t *)tx_block[fill_idx], 2);
-	fill_idx = (tx_idx + 1) % NUM_BLOCKS;
-	num_in_buf++;
-}
-
-K_TIMER_DEFINE(i2s_pack_timer, i2s_pack_isr, NULL);
- 
-static char MEM_SLAB_CACHE_ATTR __aligned(WB_UP(32))
- _k_mem_slab_buf_tx_0_mem_slab[(NUM_BLOCKS) * WB_UP(BLOCK_SIZE)];
- 
-static STRUCT_SECTION_ITERABLE(k_mem_slab, tx_0_mem_slab) =
-Z_MEM_SLAB_INITIALIZER(tx_0_mem_slab, _k_mem_slab_buf_tx_0_mem_slab,
-	WB_UP(BLOCK_SIZE), NUM_BLOCKS);
-
-
-int main(void)
-{
-	int ret;
-	int ret_led;
-	if (!gpio_is_ready_dt(&led0)) {
-		return 0;
-	}
-
-	ret_led = gpio_pin_configure_dt(&led0, GPIO_OUTPUT_ACTIVE);
-	if (ret_led < 0) {
-		return 0;
-	}
-	ret_led = gpio_pin_configure_dt(&led1, GPIO_OUTPUT_ACTIVE);
-	if (ret_led < 0) {
-		return 0;
-	}
-	
+	/* Configure the I2S device */
 	struct i2s_config i2s_cfg;
-	
-	if (!device_is_ready(dev_i2s)) {
-		printf("I2S device not ready\n");
-		return -ENODEV;
-	}
-	/* Configure I2S stream */
-	i2s_cfg.word_size = 16U;
-	i2s_cfg.channels = 2U;
+	i2s_cfg.word_size = 16; // due to int16_t in data_frame declaration
+	i2s_cfg.channels = 2; // L + R channel
 	i2s_cfg.format = I2S_FMT_DATA_FORMAT_I2S;
+	i2s_cfg.options = I2S_OPT_BIT_CLK_MASTER | I2S_OPT_FRAME_CLK_MASTER;
 	i2s_cfg.frame_clk_freq = 44100;
+	i2s_cfg.mem_slab = &mem_slab;
 	i2s_cfg.block_size = BLOCK_SIZE;
 	i2s_cfg.timeout = 0;
-	/* Configure the Transmit port as Master */
-	i2s_cfg.options = I2S_OPT_FRAME_CLK_MASTER
-	| I2S_OPT_BIT_CLK_MASTER;
-	i2s_cfg.mem_slab = &tx_0_mem_slab;
-	ret = i2s_configure(dev_i2s, I2S_DIR_TX, &i2s_cfg);
+	int ret = i2s_configure(i2s_dev, I2S_DIR_TX, &i2s_cfg);
 	if (ret < 0) {
-		printf("Failed to configure I2S stream\n");
-		return ret;
+		printk("Failed to configure the I2S stream: (%d)\n", ret);
+		return;
 	}
-	
-	/* Prepare all the TX blocks */
-	for (tx_idx = 0; tx_idx < NUM_BLOCKS/2; tx_idx++) {
-		ret = k_mem_slab_alloc(&tx_0_mem_slab, &tx_block[fill_idx], K_FOREVER);
+
+	/* Allocate the memory blocks (tx buffer) from the slab and
+	   set everything to 0 */
+	void *mem_blocks;
+	ret = k_mem_slab_alloc(&mem_slab, &mem_blocks, K_NO_WAIT);
+	if (ret < 0) {
+		printk("Failed to allocate the memory blocks: %d\n", ret);
+		return;
+	}
+	memset((uint16_t*)mem_blocks, 0, NUM_SAMPLES * NUM_BLOCKS);
+
+	/* Start the transmission of data */
+	ret = i2s_trigger(i2s_dev, I2S_DIR_TX, I2S_TRIGGER_START);
+	if (ret < 0) {
+		printk("Failed to start the transmission: %d\n", ret);
+		return;
+	}
+
+	// printk("i2s transmission started\n");
+
+	ret = i2s_write(i2s_dev, &mem_blocks[0], BLOCK_SIZE);
+	if (ret < 0) {
+		printk("(non-buffer) write failed with: %d\n", ret);
+		return;
+	}
+
+	/* Write Data */
+	ret = i2s_buf_write(i2s_dev, mem_blocks, BLOCK_SIZE);
+	if (ret < 0) {
+		printk("Error: first i2s_write failed with %d\n", ret);
+		// return;
+	}
+
+	for(;;) {
+		/* Put data into the tx buffer */
+		for (int i = 0; i < NUM_SAMPLES * NUM_BLOCKS; i++) {
+			((uint16_t*)mem_blocks)[i] = data_frame[i % NUM_SAMPLES];
+		}
+		
+		/* Write Data */
+		int ret = i2s_buf_write(i2s_dev, mem_blocks, BLOCK_SIZE);
 		if (ret < 0) {
-			printf("Failed to allocate TX block\n");
-			return ret;
+			printk("Error: i2s_write failed with %d\n", ret);
+			// return;
 		}
 	}
-
-	/* Fill half of the Tx Blocks */
-	for (fill_idx = 0; fill_idx < NUM_BLOCKS; fill_idx++) {
-		fill_buf((uint16_t *)tx_block[tx_idx], 2);
-		num_in_buf++;
-	}
-
-	/* Trigger the I2S transmission */
-	ret = i2s_trigger(dev_i2s, I2S_DIR_TX, I2S_TRIGGER_START);
-	if (ret < 0) {
-		printf("Could not trigger I2S tx\n");
-		return ret;
-	}
-
-	for (; tx_idx < NUM_BLOCKS; ) {
-		ret = i2s_write(dev_i2s, tx_block[tx_idx++], BLOCK_SIZE);
-		if (ret < 0) {
-			printf("Could not write TX buffer %d\n", tx_idx);
-			return ret;
-		}
-	}
-	
-	ret = i2s_trigger(dev_i2s, I2S_DIR_TX, I2S_TRIGGER_DRAIN);
-	if (ret < 0) {
-		printf("Could not trigger I2S tx\n");
-		return ret;
-	}
-	k_timer_start(&i2s_pack_timer, K_USEC(46440), K_USEC(46440));
-
-	return 0;
 }
