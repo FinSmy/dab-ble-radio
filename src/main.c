@@ -20,7 +20,7 @@ static int16_t data_frame[NUM_SAMPLES] = {
 #define BLOCK_SIZE (2 * sizeof(data_frame))
 
 /* The number of memory blocks in a slab has to be at least 2 per queue */
-#define NUM_BLOCKS 5
+#define NUM_BLOCKS 10
 
 /* Define a new Memory Slab which consistes of NUM_BLOCKS blocks
    __________________________________________________________________________
@@ -29,64 +29,25 @@ static int16_t data_frame[NUM_SAMPLES] = {
   |______________|______________|______________|______________|______________|
 */
 static K_MEM_SLAB_DEFINE(mem_slab, BLOCK_SIZE, NUM_BLOCKS, NUM_SAMPLES);
+void *mem_blocks;
 
-void main(void) {
-	/* Get I2S device from the devicetree */
-	const struct device *i2s_dev = DEVICE_DT_GET(DT_NODELABEL(i2s_tx));
-	if (!device_is_ready(i2s_dev)) {
-		printk("%s is not ready\n", i2s_dev->name);
-		return;
-	}
+/* Get I2S device from the devicetree */
+const struct device *i2s_dev = DEVICE_DT_GET(DT_NODELABEL(i2s_tx));
+struct i2s_config i2s_cfg;
 
-	/* Configure the I2S device */
-	struct i2s_config i2s_cfg;
-	i2s_cfg.word_size = 16; // due to int16_t in data_frame declaration
-	i2s_cfg.channels = 2; // L + R channel
-	i2s_cfg.format = I2S_FMT_DATA_FORMAT_I2S;
-	i2s_cfg.options = I2S_OPT_BIT_CLK_MASTER | I2S_OPT_FRAME_CLK_MASTER;
-	i2s_cfg.frame_clk_freq = 44100;
-	i2s_cfg.mem_slab = &mem_slab;
-	i2s_cfg.block_size = BLOCK_SIZE;
-	i2s_cfg.timeout = 0;
-	int ret = i2s_configure(i2s_dev, I2S_DIR_TX, &i2s_cfg);
-	if (ret < 0) {
-		printk("Failed to configure the I2S stream: (%d)\n", ret);
-		return;
-	}
+/* FIFO for holding audio data to be sent to i2s tx */
+static K_FIFO_DEFINE(rx_samples_fifo);
+typedef struct audio_data {
+	int16_t data_buffer[NUM_SAMPLES];
+} audio_data_t;
 
-	/* Allocate the memory blocks (tx buffer) from the slab and
-	   set everything to 0 */
-	void *mem_blocks;
-	ret = k_mem_slab_alloc(&mem_slab, &mem_blocks, K_NO_WAIT);
-	if (ret < 0) {
-		printk("Failed to allocate the memory blocks: %d\n", ret);
-		return;
-	}
-	memset((uint16_t*)mem_blocks, 0, NUM_SAMPLES * NUM_BLOCKS);
+/* Semaphore tracking how many audio buffers we have to load into FIFO */
+K_SEM_DEFINE(new_rx_audio_samps_sem, 0, 10);
 
-	/* Start the transmission of data */
-	ret = i2s_trigger(i2s_dev, I2S_DIR_TX, I2S_TRIGGER_START);
-	if (ret < 0) {
-		printk("Failed to start the transmission: %d\n", ret);
-		return;
-	}
-
-	// printk("i2s transmission started\n");
-
-	ret = i2s_write(i2s_dev, &mem_blocks[0], BLOCK_SIZE);
-	if (ret < 0) {
-		printk("(non-buffer) write failed with: %d\n", ret);
-		return;
-	}
-
-	/* Write Data */
-	ret = i2s_buf_write(i2s_dev, mem_blocks, BLOCK_SIZE);
-	if (ret < 0) {
-		printk("Error: first i2s_write failed with %d\n", ret);
-		// return;
-	}
-
-	for(;;) {
+void write_to_i2s_buffer()
+{
+	while (1)
+	{
 		/* Put data into the tx buffer */
 		for (int i = 0; i < NUM_SAMPLES * NUM_BLOCKS; i++) {
 			((uint16_t*)mem_blocks)[i] = data_frame[i % NUM_SAMPLES];
@@ -99,4 +60,95 @@ void main(void) {
 			// return;
 		}
 	}
+}
+
+bool i2s_init()
+{
+	if (!device_is_ready(i2s_dev)) {
+		printk("%s is not ready\n", i2s_dev->name);
+		return false;
+	}
+
+	/* Configure the I2S device */
+	i2s_cfg.word_size = 16;
+	i2s_cfg.channels = 2; // L + R channel
+	i2s_cfg.format = I2S_FMT_DATA_FORMAT_I2S;
+	i2s_cfg.options = I2S_OPT_BIT_CLK_MASTER | I2S_OPT_FRAME_CLK_MASTER;
+	i2s_cfg.frame_clk_freq = 32000;
+	i2s_cfg.mem_slab = &mem_slab;
+	i2s_cfg.block_size = BLOCK_SIZE;
+	i2s_cfg.timeout = 2;
+	int ret = i2s_configure(i2s_dev, I2S_DIR_TX, &i2s_cfg);
+	if (ret < 0) {
+		printk("Failed to configure the I2S stream: (%d)\n", ret);
+		return false; 
+	}
+
+	/* Allocate the memory blocks (tx buffer) from the slab and
+	set everything to 0 */
+	ret = k_mem_slab_alloc(&mem_slab, &mem_blocks, K_NO_WAIT);
+	if (ret < 0) {
+		printk("Failed to allocate the memory blocks: %d\n", ret);
+		return false;
+	}
+	memset((uint16_t*)mem_blocks, 0, NUM_SAMPLES * NUM_BLOCKS);
+
+	/* Start the transmission of data */
+	ret = i2s_trigger(i2s_dev, I2S_DIR_TX, I2S_TRIGGER_START);
+	if (ret < 0) {
+		printk("Failed to start the transmission: %d\n", ret);
+		return false;
+	}
+
+	// printk("i2s transmission started\n");
+
+	ret = i2s_write(i2s_dev, mem_blocks, BLOCK_SIZE);
+	if (ret < 0) {
+		printk("(non-buffer) write failed with: %d\n", ret);
+		return false;
+	}
+
+	/* Write Data */
+	ret = i2s_buf_write(i2s_dev, mem_blocks, BLOCK_SIZE);
+	if (ret < 0) {
+		printk("Error: first i2s_write failed with %d\n", ret);
+		// return;
+	}
+   
+    return true;
+}
+	
+void audio_receive()
+{
+	audio_data_t rx_data; // Is this correct?
+	
+	while(1)
+	{
+		// Place into FIFO if an input audio buffer is available
+		k_sem_take(&new_rx_audio_samps_sem, K_FOREVER);
+		memcpy(rx_data.data_buffer, data_frame, NUM_SAMPLES * sizeof(int16_t));
+		k_fifo_put(&rx_samples_fifo, &rx_data);
+	}
+}
+	
+static void pack_fifo_isr(struct k_timer *dummy)
+{
+	k_sem_give(&new_rx_audio_samps_sem);
+}
+
+/* Timer for filling of FIFO buffer */
+K_TIMER_DEFINE(fifo_fill_tmr, pack_fifo_isr, NULL);
+
+K_THREAD_DEFINE(audio_receive_id, 1024, audio_receive, NULL, NULL, NULL, -4, 0, 0);
+K_THREAD_DEFINE(write_i2s_buff_id, 1024, write_to_i2s_buffer, NULL, NULL, NULL, -3, 0, 2);
+	
+int main(void) {
+	/* Initialise i2s device */
+	bool i2s_ret = i2s_init();
+	if (i2s_ret)
+	{
+		return -1;
+	}
+
+	k_timer_start(&fifo_fill_tmr, K_USEC(1000), K_USEC(1000));
 }
