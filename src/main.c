@@ -4,6 +4,9 @@
 #include <zephyr/device.h>
 #include <zephyr/drivers/i2s.h>
 #include <zephyr/drivers/gpio.h>
+#include <zephyr/logging/log.h>
+
+LOG_MODULE_REGISTER(i2s_transmission, LOG_LEVEL_DBG);
 
 /* Prepare for 32 sample values */
 #define NUM_SAMPLES 32
@@ -43,6 +46,7 @@ typedef struct audio_data {
 
 /* Semaphore tracking how many audio buffers we have to load into FIFO */
 K_SEM_DEFINE(new_rx_audio_samps_sem, 0, 10);
+int sem_value = 0;
 
 void write_to_i2s_buffer()
 {
@@ -64,6 +68,7 @@ void write_to_i2s_buffer()
 
 bool i2s_init()
 {
+	LOG_DBG("inside i2s_init");
 	if (!device_is_ready(i2s_dev)) {
 		printk("%s is not ready\n", i2s_dev->name);
 		return false;
@@ -92,6 +97,8 @@ bool i2s_init()
 		return false;
 	}
 	memset((uint16_t*)mem_blocks, 0, NUM_SAMPLES * NUM_BLOCKS);
+	LOG_DBG("Slab allocation complete");
+
 
 	/* Start the transmission of data */
 	ret = i2s_trigger(i2s_dev, I2S_DIR_TX, I2S_TRIGGER_START);
@@ -100,13 +107,15 @@ bool i2s_init()
 		return false;
 	}
 
-	// printk("i2s transmission started\n");
+	LOG_DBG("i2s transmission started\n");
 
 	ret = i2s_write(i2s_dev, mem_blocks, BLOCK_SIZE);
 	if (ret < 0) {
 		printk("(non-buffer) write failed with: %d\n", ret);
 		return false;
 	}
+
+	LOG_DBG("wrote to i2s buffer\n");
 
 	/* Write Data */
 	ret = i2s_buf_write(i2s_dev, mem_blocks, BLOCK_SIZE);
@@ -120,12 +129,15 @@ bool i2s_init()
 	
 void audio_receive()
 {
+	LOG_DBG("inside audio_receive");
 	audio_data_t rx_data; // Is this correct?
 	
 	while(1)
 	{
 		// Place into FIFO if an input audio buffer is available
 		k_sem_take(&new_rx_audio_samps_sem, K_FOREVER);
+		sem_value -= 1;
+		// LOG_DBG("taking: sem_k = %d\n", sem_value);
 		memcpy(rx_data.data_buffer, data_frame, NUM_SAMPLES * sizeof(int16_t));
 		k_fifo_put(&rx_samples_fifo, &rx_data);
 	}
@@ -133,7 +145,10 @@ void audio_receive()
 	
 static void pack_fifo_isr(struct k_timer *dummy)
 {
+	LOG_DBG("pack_fifo_isr");
 	k_sem_give(&new_rx_audio_samps_sem);
+	sem_value += 1;
+	// LOG_DBG("giving: sem_k = %d\n", sem_value);
 }
 
 /* Timer for filling of FIFO buffer */
@@ -143,6 +158,7 @@ K_THREAD_DEFINE(audio_receive_id, 1024, audio_receive, NULL, NULL, NULL, -4, 0, 
 K_THREAD_DEFINE(write_i2s_buff_id, 1024, write_to_i2s_buffer, NULL, NULL, NULL, -3, 0, 2);
 	
 int main(void) {
+	LOG_INF("Start of main");
 	/* Initialise i2s device */
 	bool i2s_ret = i2s_init();
 	if (i2s_ret)
