@@ -32,7 +32,7 @@ static K_MEM_SLAB_DEFINE(mem_slab, BLOCK_SIZE, NUM_BLOCKS, NUM_SAMPLES);
 
 void main(void) {
 	/* Get I2S device from the devicetree */
-	const struct device *i2s_dev = DEVICE_DT_GET(DT_NODELABEL(i2s_rxtx));
+	const struct device *i2s_dev = DEVICE_DT_GET(DT_NODELABEL(i2s_tx));
 	if (!device_is_ready(i2s_dev)) {
 		printk("%s is not ready\n", i2s_dev->name);
 		return;
