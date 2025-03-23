@@ -41,7 +41,8 @@ struct i2s_config i2s_cfg;
 /* FIFO for holding audio data to be sent to i2s tx */
 static K_FIFO_DEFINE(rx_samples_fifo);
 typedef struct audio_data {
-	int16_t data_buffer[NUM_SAMPLES];
+	void *fifo_reserved; // Required since FIFO's internal structure is that of a linked list
+	int16_t data_buffer[BLOCK_SIZE];
 } audio_data_t;
 
 /* Semaphore tracking how many audio buffers we have to load into FIFO */
@@ -52,10 +53,16 @@ void write_to_i2s_buffer()
 {
 	while (1)
 	{
+		// Get audio samples out of FIFO
+		audio_data_t *rx_samp;
+		rx_samp = k_fifo_get(&rx_samples_fifo, K_FOREVER);
+
 		/* Put data into the tx buffer */
-		for (int i = 0; i < NUM_SAMPLES * NUM_BLOCKS; i++) {
-			((uint16_t*)mem_blocks)[i] = data_frame[i % NUM_SAMPLES];
+		for (int i = 0; i < BLOCK_SIZE; i++) {
+			((uint16_t*)mem_blocks)[i] = rx_samp->data_buffer[i % NUM_SAMPLES];
 		}
+
+		free(rx_samp);
 		
 		/* Write Data */
 		int ret = i2s_buf_write(i2s_dev, mem_blocks, BLOCK_SIZE);
@@ -63,6 +70,7 @@ void write_to_i2s_buffer()
 			printk("Error: i2s_write failed with %d\n", ret);
 			// return;
 		}
+		LOG_DBG("Wrote data");
 	}
 }
 
@@ -123,14 +131,14 @@ bool i2s_init()
 		printk("Error: first i2s_write failed with %d\n", ret);
 		// return;
 	}
-   
+	LOG_DBG("wrote to i2s buffer for second time\n");
     return true;
 }
 	
 void audio_receive()
 {
 	LOG_DBG("inside audio_receive");
-	audio_data_t rx_data; // Is this correct?
+	audio_data_t *rx_data = k_malloc(sizeof(audio_data_t));
 	
 	while(1)
 	{
@@ -138,7 +146,7 @@ void audio_receive()
 		k_sem_take(&new_rx_audio_samps_sem, K_FOREVER);
 		sem_value -= 1;
 		// LOG_DBG("taking: sem_k = %d\n", sem_value);
-		memcpy(rx_data.data_buffer, data_frame, NUM_SAMPLES * sizeof(int16_t));
+		memcpy(rx_data->data_buffer, data_frame, rx_data->data_buffer);
 		k_fifo_put(&rx_samples_fifo, &rx_data);
 	}
 }
@@ -154,8 +162,8 @@ static void pack_fifo_isr(struct k_timer *dummy)
 /* Timer for filling of FIFO buffer */
 K_TIMER_DEFINE(fifo_fill_tmr, pack_fifo_isr, NULL);
 
-K_THREAD_DEFINE(audio_receive_id, 1024, audio_receive, NULL, NULL, NULL, -4, 0, 0);
-K_THREAD_DEFINE(write_i2s_buff_id, 1024, write_to_i2s_buffer, NULL, NULL, NULL, -3, 0, 2);
+K_THREAD_DEFINE(audio_receive_id, 1024, audio_receive, NULL, NULL, NULL, 4, 0, 0);
+K_THREAD_DEFINE(write_i2s_buff_id, 1024, write_to_i2s_buffer, NULL, NULL, NULL, 3, 0, 2);
 	
 int main(void) {
 	LOG_INF("Start of main");
@@ -166,5 +174,5 @@ int main(void) {
 		return -1;
 	}
 
-	k_timer_start(&fifo_fill_tmr, K_USEC(1000), K_USEC(1000));
+	// k_timer_start(&fifo_fill_tmr, K_USEC(1000), K_USEC(1000));
 }
