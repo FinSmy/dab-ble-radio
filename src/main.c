@@ -42,7 +42,7 @@ struct i2s_config i2s_cfg;
 static K_FIFO_DEFINE(rx_samples_fifo);
 typedef struct audio_data {
 	void *fifo_reserved; // Required since FIFO's internal structure is that of a linked list
-	int16_t data_buffer[BLOCK_SIZE];
+	int16_t data_buffer[NUM_SAMPLES];
 } audio_data_t;
 
 /* Semaphore tracking how many audio buffers we have to load into FIFO */
@@ -51,21 +51,26 @@ int sem_value = 0;
 
 void write_to_i2s_buffer()
 {
+	LOG_DBG("Inside\n");
 	while (1)
 	{
 		// Get audio samples out of FIFO
 		audio_data_t *rx_samp;
+		LOG_DBG("Trying to get samples from FIFO\n");
 		rx_samp = k_fifo_get(&rx_samples_fifo, K_FOREVER);
+		LOG_DBG("Got sample from FIFO\n");
 
 		/* Put data into the tx buffer */
 		for (int i = 0; i < BLOCK_SIZE; i++) {
 			((uint16_t*)mem_blocks)[i] = rx_samp->data_buffer[i % NUM_SAMPLES];
 		}
 
-		free(rx_samp);
+		k_free(rx_samp);
 		
 		/* Write Data */
-		int ret = i2s_buf_write(i2s_dev, mem_blocks, BLOCK_SIZE);
+		LOG_DBG("About to write to i2s tx buffer\n");
+		int ret = i2s_write(i2s_dev, mem_blocks, BLOCK_SIZE);
+		LOG_DBG("Wrote to i2s tx buffer\n");
 		if (ret < 0) {
 			printk("Error: i2s_write failed with %d\n", ret);
 			// return;
@@ -90,7 +95,7 @@ bool i2s_init()
 	i2s_cfg.frame_clk_freq = 32000;
 	i2s_cfg.mem_slab = &mem_slab;
 	i2s_cfg.block_size = BLOCK_SIZE;
-	i2s_cfg.timeout = 2;
+	i2s_cfg.timeout = 0;
 	int ret = i2s_configure(i2s_dev, I2S_DIR_TX, &i2s_cfg);
 	if (ret < 0) {
 		printk("Failed to configure the I2S stream: (%d)\n", ret);
@@ -137,36 +142,39 @@ bool i2s_init()
 	
 void audio_receive()
 {
-	LOG_DBG("inside audio_receive");
-	audio_data_t *rx_data = k_malloc(sizeof(audio_data_t));
+	LOG_DBG("inside");
 	
 	while(1)
 	{
 		// Place into FIFO if an input audio buffer is available
+		audio_data_t *rx_data = k_malloc(sizeof(audio_data_t));
 		k_sem_take(&new_rx_audio_samps_sem, K_FOREVER);
 		sem_value -= 1;
-		// LOG_DBG("taking: sem_k = %d\n", sem_value);
-		memcpy(rx_data->data_buffer, data_frame, rx_data->data_buffer);
+		LOG_DBG("taking: sem_k = %d\n", sem_value);
+		memcpy(rx_data->data_buffer, data_frame, sizeof(rx_data->data_buffer));
 		k_fifo_put(&rx_samples_fifo, &rx_data);
 	}
+	LOG_DBG("exiting");
 }
 	
 static void pack_fifo_isr(struct k_timer *dummy)
 {
-	LOG_DBG("pack_fifo_isr");
+	// LOG_DBG("pack_fifo_isr");
 	k_sem_give(&new_rx_audio_samps_sem);
 	sem_value += 1;
-	// LOG_DBG("giving: sem_k = %d\n", sem_value);
+	LOG_DBG("giving: sem_k = %d\n", sem_value);
 }
 
 /* Timer for filling of FIFO buffer */
 K_TIMER_DEFINE(fifo_fill_tmr, pack_fifo_isr, NULL);
 
 K_THREAD_DEFINE(audio_receive_id, 1024, audio_receive, NULL, NULL, NULL, 4, 0, 0);
-K_THREAD_DEFINE(write_i2s_buff_id, 1024, write_to_i2s_buffer, NULL, NULL, NULL, 3, 0, 2);
+K_THREAD_DEFINE(write_i2s_buff_id, 1024, write_to_i2s_buffer, NULL, NULL, NULL, 3, 0, 200);
 	
 int main(void) {
 	LOG_INF("Start of main");
+	k_timer_start(&fifo_fill_tmr, K_USEC(0), K_USEC(1000));
+	
 	/* Initialise i2s device */
 	bool i2s_ret = i2s_init();
 	if (i2s_ret)
@@ -174,5 +182,4 @@ int main(void) {
 		return -1;
 	}
 
-	// k_timer_start(&fifo_fill_tmr, K_USEC(1000), K_USEC(1000));
 }
