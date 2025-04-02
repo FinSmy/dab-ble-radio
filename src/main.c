@@ -40,6 +40,7 @@ struct i2s_config i2s_cfg;
 
 /* FIFO for holding audio data to be sent to i2s tx */
 static K_FIFO_DEFINE(rx_samples_fifo);
+int fifo_count = 0;
 #define NUM_AUDIO_BLOCKS_FIFO 2
 typedef struct audio_data {
 	void *fifo_reserved; // Required since FIFO's internal structure is that of a linked list
@@ -113,6 +114,8 @@ void write_to_i2s_buffer()
 	// Try configuring i2s in first time write_to_i2s_buffer is called
 	/* Initialise i2s device */
 	bool i2s_ret = i2s_init();
+
+	LOG_DBG("Size of FIFO after initialising i2s = %d\n", fifo_count);
 	if (!i2s_ret)
 	{
 		LOG_ERR("Failed to initialise i2s peripheral");
@@ -124,7 +127,8 @@ void write_to_i2s_buffer()
 		audio_data_t *rx_samp;
 		// LOG_DBG("Trying to get samples from FIFO\n");
 		rx_samp = k_fifo_get(&rx_samples_fifo, K_FOREVER);
-		LOG_DBG("Got sample from FIFO\n");
+		fifo_count--;
+		LOG_DBG("Got sample from FIFO, fifo_count = %d\n", fifo_count);
 
 		// ! Believe I should be allocating buffer here everytime using k_mem_slab_alloc with a new pointer
 		// Update - think I may need to create new pointer rather than mem_blocks
@@ -157,6 +161,7 @@ void write_to_i2s_buffer()
 		// LOG_DBG("Wrote to i2s tx buffer\n");
 		if (ret < 0) {
 			printk("Error: i2s_write failed with %d\n", ret);
+			//! Handle this better - should be able to restart the i2s transmission
 			// return;
 		}
 		// LOG_DBG("Wrote data");
@@ -186,6 +191,7 @@ void audio_receive()
 				rx_data->data_buffer[i] = data_frame[i % NUM_SAMPLES];
 			}
 			k_fifo_put(&rx_samples_fifo, &rx_data);
+			fifo_count++;
 		}
 	}
 	LOG_DBG("exiting");
