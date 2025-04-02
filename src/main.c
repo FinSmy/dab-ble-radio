@@ -81,7 +81,7 @@ bool i2s_init()
 		printk("Failed to allocate the memory blocks: %d\n", ret);
 		return false;
 	}
-	memset((uint16_t*)mem_blocks, 0, NUM_SAMPLES * NUM_BLOCKS);
+	memset((uint16_t*)mem_blocks, 0, BLOCK_SIZE * 2);
 
 	/* Start the transmission of data */
 	ret = i2s_trigger(i2s_dev, I2S_DIR_TX, I2S_TRIGGER_START);
@@ -99,10 +99,10 @@ bool i2s_init()
 	}
 
 	/* Write Data */
-	ret = i2s_buf_write(i2s_dev, mem_blocks, BLOCK_SIZE);
-	if (ret < 0) {
-		printk("Error: first i2s_write failed with %d\n", ret);
-	}
+	// ret = i2s_buf_write(i2s_dev, mem_blocks, BLOCK_SIZE);
+	// if (ret < 0) {
+	// 	printk("Error: first i2s_write failed with %d\n", ret);
+	// }
 	LOG_DBG("Finished\n");
     return true;
 }
@@ -142,7 +142,7 @@ void write_to_i2s_buffer()
 		if (rx_samp != NULL)
 		{
 			for (int i = 0; i < BLOCK_SIZE; i++) {
-				((int16_t*)new_mem_blocks)[i] = rx_samp->data_buffer[i % NUM_SAMPLES];
+				((uint16_t*)new_mem_blocks)[i] = rx_samp->data_buffer[i % NUM_SAMPLES];
 			}
 		}
 		else
