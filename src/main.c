@@ -132,38 +132,40 @@ void write_to_i2s_buffer()
 
 		// ! Believe I should be allocating buffer here everytime using k_mem_slab_alloc with a new pointer
 		// Update - think I may need to create new pointer rather than mem_blocks
-		void* new_mem_blocks;
-		int ret = k_mem_slab_alloc(&mem_slab, &new_mem_blocks, K_FOREVER);
-		if (ret < 0) {
-			printk("Failed to allocate the memory blocks: %d\n", ret);
-		}
+		// void* new_mem_blocks;
+		// int ret = k_mem_slab_alloc(&mem_slab, &new_mem_blocks, K_FOREVER);
+		// if (ret < 0) {
+		// 	printk("Failed to allocate the memory blocks: %d\n", ret);
+		// }
 		
 		/* Put data into the tx buffer */
-		if (rx_samp != NULL)
-		{
-			for (int i = 0; i < BLOCK_SIZE; i++) {
-				((uint16_t*)new_mem_blocks)[i] = rx_samp->data_buffer[i % NUM_SAMPLES];
-			}
-		}
-		else
-		{
-			LOG_DBG("rx_samp wasn null");
-		}
-		// LOG_DBG("Before free");
-		// k_free(rx_samp);
-		// LOG_DBG("After free");
+		// if (rx_samp != NULL)
+		// {
+		// 	for (int i = 0; i < BLOCK_SIZE; i++) {
+		// 		// ((uint16_t*)new_mem_blocks)[i] = rx_samp->data_buffer[i % NUM_SAMPLES];
+		// 		((uint16_t*)new_mem_blocks)[i] = 0;
+		// 	}
+		// }
+		// else
+		// {
+		// 	LOG_DBG("rx_samp wasn null");
+		// }
 		
 		/* Write Data */
 		// LOG_DBG("About to write to i2s tx buffer\n");
 		// printk("First value: %d\n", ((int16_t*)mem_blocks)[0]);
 		// printk("Second value: %d\n", ((int16_t*)mem_blocks)[1]);
-		ret = i2s_write(i2s_dev, new_mem_blocks, BLOCK_SIZE);
+		printk("First three values from fifo = %d, %d, %d", rx_samp->data_buffer[0], rx_samp->data_buffer[2], rx_samp->data_buffer[3]);
+		int ret = i2s_buf_write(i2s_dev, &rx_samp->data_buffer, BLOCK_SIZE);
 		// LOG_DBG("Wrote to i2s tx buffer\n");
 		if (ret < 0) {
 			printk("Error: i2s_write failed with %d\n", ret);
 			//! Handle this better - should be able to restart the i2s transmission
 			// return;
 		}
+		// LOG_DBG("Before free");
+		// k_free(rx_samp);
+		// LOG_DBG("After free");
 		// LOG_DBG("Wrote data");
 	}
 }
@@ -188,7 +190,8 @@ void audio_receive()
 		{
 			for(int i = 0; i < NUM_AUDIO_BLOCKS_FIFO * NUM_SAMPLES; i++)
 			{
-				rx_data->data_buffer[i] = data_frame[i % NUM_SAMPLES];
+				// rx_data->data_buffer[i] = data_frame[i % NUM_SAMPLES];
+				rx_data->data_buffer[i] = 0;
 			}
 			k_fifo_put(&rx_samples_fifo, &rx_data);
 			fifo_count++;
