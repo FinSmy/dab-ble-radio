@@ -57,6 +57,9 @@ K_SEM_DEFINE(new_rx_audio_samps_sem, 0, 10);
 int sem_value = 0;
 int sem_total = 0;
 
+// TODO remove
+int big_count = 0;
+
 bool i2s_init()
 {
 	if (!device_is_ready(i2s_dev)) {
@@ -160,7 +163,7 @@ void write_to_i2s_buffer()
 		// LOG_DBG("About to write to i2s tx buffer\n");
 		// printk("First value: %d\n", ((int16_t*)mem_blocks)[0]);
 		// printk("Second value: %d\n", ((int16_t*)mem_blocks)[1]);
-		// printk("First three values from fifo = %d, %d, %d\n", rx_samp->data_buffer[0], rx_samp->data_buffer[2], rx_samp->data_buffer[3]);
+		printk("First three values from fifo = %d, %d, %d\n", rx_samp->data_buffer[0], rx_samp->data_buffer[1], rx_samp->data_buffer[2]);
 		int ret = i2s_buf_write(i2s_dev, &rx_samp->data_buffer, BLOCK_SIZE);
 		// LOG_DBG("Wrote to i2s tx buffer\n");
 		if (ret < 0) {
@@ -196,9 +199,11 @@ void audio_receive()
 			for(int i = 0; i < NUM_AUDIO_BLOCKS_FIFO * NUM_SAMPLES; i++)
 			{
 				// rx_data->data_buffer[i] = data_frame[i % NUM_SAMPLES];
-				rx_data->data_buffer[i] = 0;
+				rx_data->data_buffer[i] = big_count;
+				big_count = (big_count + 1) % 10000;
 			}
-			k_fifo_put(&rx_samples_fifo, &rx_data);
+			// printk("First three values into fifo = %d, %d, %d\n", rx_data->data_buffer[0], rx_data->data_buffer[1], rx_data->data_buffer[2]);
+			k_fifo_put(&rx_samples_fifo, rx_data);
 			idx_fifo_memory_write = (idx_fifo_memory_write + 1) % FIFO_MEM_SIZE;
 			fifo_count++;
 		}
