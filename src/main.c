@@ -47,6 +47,11 @@ typedef struct audio_data {
 	int16_t data_buffer[NUM_SAMPLES * NUM_AUDIO_BLOCKS_FIFO];
 } audio_data_t;
 
+#define FIFO_MEM_SIZE 10
+audio_data_t fifo_memory[FIFO_MEM_SIZE];
+int idx_fifo_memory_write = 0;
+int idx_fifo_memory_read = 0;
+
 /* Semaphore tracking how many audio buffers we have to load into FIFO */
 K_SEM_DEFINE(new_rx_audio_samps_sem, 0, 10);
 int sem_value = 0;
@@ -124,11 +129,11 @@ void write_to_i2s_buffer()
 	while (1)
 	{
 		// Get audio samples out of FIFO
-		audio_data_t *rx_samp;
+		audio_data_t *rx_samp = k_malloc(sizeof(audio_data_t));
 		// LOG_DBG("Trying to get samples from FIFO\n");
 		rx_samp = k_fifo_get(&rx_samples_fifo, K_FOREVER);
 		fifo_count--;
-		LOG_DBG("Got sample from FIFO, fifo_count = %d\n", fifo_count);
+		// LOG_DBG("Got sample from FIFO, fifo_count = %d\n", fifo_count);
 
 		// ! Believe I should be allocating buffer here everytime using k_mem_slab_alloc with a new pointer
 		// Update - think I may need to create new pointer rather than mem_blocks
@@ -155,7 +160,7 @@ void write_to_i2s_buffer()
 		// LOG_DBG("About to write to i2s tx buffer\n");
 		// printk("First value: %d\n", ((int16_t*)mem_blocks)[0]);
 		// printk("Second value: %d\n", ((int16_t*)mem_blocks)[1]);
-		printk("First three values from fifo = %d, %d, %d", rx_samp->data_buffer[0], rx_samp->data_buffer[2], rx_samp->data_buffer[3]);
+		// printk("First three values from fifo = %d, %d, %d\n", rx_samp->data_buffer[0], rx_samp->data_buffer[2], rx_samp->data_buffer[3]);
 		int ret = i2s_buf_write(i2s_dev, &rx_samp->data_buffer, BLOCK_SIZE);
 		// LOG_DBG("Wrote to i2s tx buffer\n");
 		if (ret < 0) {
@@ -185,7 +190,7 @@ void audio_receive()
 		// 	LOG_DBG("taking: sem_k = %d\n", sem_value);
 		// }
 
-		audio_data_t *rx_data = k_malloc(sizeof(audio_data_t));
+		audio_data_t *rx_data = &fifo_memory[idx_fifo_memory_write];
 		if (rx_data != NULL)
 		{
 			for(int i = 0; i < NUM_AUDIO_BLOCKS_FIFO * NUM_SAMPLES; i++)
@@ -194,6 +199,7 @@ void audio_receive()
 				rx_data->data_buffer[i] = 0;
 			}
 			k_fifo_put(&rx_samples_fifo, &rx_data);
+			idx_fifo_memory_write = (idx_fifo_memory_write + 1) % FIFO_MEM_SIZE;
 			fifo_count++;
 		}
 	}
