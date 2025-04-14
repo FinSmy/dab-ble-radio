@@ -25,11 +25,11 @@ static int16_t data_frame[NUM_SAMPLES] = {
 /* The number of memory blocks in a slab has to be at least 2 per queue */
 #define NUM_BLOCKS 6
 
-/* Define a new Memory Slab which consistes of NUM_BLOCKS blocks
-   ____________________________________________________________
-  |    Block 0   |    Block 1   |    Block 2   |    Block 3   |
-  |    0...31    |    0...31    |    0...31    |    0...31    |
-  |______________|______________|______________|______________|
+/* Define a new Memory Slab which consists of NUM_BLOCKS blocks
+   __________________________________________________________________________________________
+  |    Block 0   |    Block 1   |    Block 2   |    Block 3   |    Block 4   |    Block 5   |
+  |    0...31    |    0...31    |    0...31    |    0...31    |    0...31    |    0...31    |
+  |______________|______________|______________|______________|______________|______________|
 */
 static K_MEM_SLAB_DEFINE(mem_slab, BLOCK_SIZE, NUM_BLOCKS, NUM_SAMPLES);
 void* mem_blocks;
@@ -75,21 +75,12 @@ bool i2s_init()
 	i2s_cfg.frame_clk_freq = 32000;
 	i2s_cfg.mem_slab = &mem_slab;
 	i2s_cfg.block_size = BLOCK_SIZE;
-	i2s_cfg.timeout = 0;
+	i2s_cfg.timeout = 10000;
 	int ret = i2s_configure(i2s_dev, I2S_DIR_TX, &i2s_cfg);
 	if (ret < 0) {
 		printk("Failed to configure the I2S stream: (%d)\n", ret);
 		return false; 
 	}
-
-	/* Allocate the memory blocks (tx buffer) from the slab and
-	set everything to 0 */
-	ret = k_mem_slab_alloc(&mem_slab, &mem_blocks, K_NO_WAIT);
-	if (ret < 0) {
-		printk("Failed to allocate the memory blocks: %d\n", ret);
-		return false;
-	}
-	memset((uint16_t*)mem_blocks, 0, BLOCK_SIZE * 2);
 
 	/* Start the transmission of data */
 	ret = i2s_trigger(i2s_dev, I2S_DIR_TX, I2S_TRIGGER_START);
@@ -100,17 +91,27 @@ bool i2s_init()
 
 	LOG_DBG("i2s transmission started\n");
 
-	ret = i2s_write(i2s_dev, mem_blocks, BLOCK_SIZE);
+	/* Write Data */
+	// Attempt to pack buffer with dummy data to keep i2s interface fed
+	ret = i2s_buf_write(i2s_dev, data_frame, sizeof(data_frame));
 	if (ret < 0) {
-		printk("(non-buffer) write failed with: %d\n", ret);
-		return false;
+		printk("Error: first i2s_write failed with %d\n", ret);
 	}
 
-	/* Write Data */
-	// ret = i2s_buf_write(i2s_dev, mem_blocks, BLOCK_SIZE);
-	// if (ret < 0) {
-	// 	printk("Error: first i2s_write failed with %d\n", ret);
-	// }
+	ret = i2s_buf_write(i2s_dev, data_frame, sizeof(data_frame));
+	if (ret < 0) {
+		printk("Error: first i2s_write failed with %d\n", ret);
+	}
+
+	ret = i2s_buf_write(i2s_dev, data_frame, sizeof(data_frame));
+	if (ret < 0) {
+		printk("Error: first i2s_write failed with %d\n", ret);
+	}
+
+	ret = i2s_buf_write(i2s_dev, data_frame, sizeof(data_frame));
+	if (ret < 0) {
+		printk("Error: first i2s_write failed with %d\n", ret);
+	}
 	LOG_DBG("Finished\n");
     return true;
 }
@@ -132,49 +133,18 @@ void write_to_i2s_buffer()
 	while (1)
 	{
 		// Get audio samples out of FIFO
-		audio_data_t *rx_samp = k_malloc(sizeof(audio_data_t));
-		// LOG_DBG("Trying to get samples from FIFO\n");
+		audio_data_t *rx_samp = k_malloc(sizeof(audio_data_t)); // Should be using k_aligned_alloc?
 		rx_samp = k_fifo_get(&rx_samples_fifo, K_FOREVER);
 		fifo_count--;
-		// LOG_DBG("Got sample from FIFO, fifo_count = %d\n", fifo_count);
 
-		// ! Believe I should be allocating buffer here everytime using k_mem_slab_alloc with a new pointer
-		// Update - think I may need to create new pointer rather than mem_blocks
-		// void* new_mem_blocks;
-		// int ret = k_mem_slab_alloc(&mem_slab, &new_mem_blocks, K_FOREVER);
-		// if (ret < 0) {
-		// 	printk("Failed to allocate the memory blocks: %d\n", ret);
-		// }
-		
-		/* Put data into the tx buffer */
-		// if (rx_samp != NULL)
-		// {
-		// 	for (int i = 0; i < BLOCK_SIZE; i++) {
-		// 		// ((uint16_t*)new_mem_blocks)[i] = rx_samp->data_buffer[i % NUM_SAMPLES];
-		// 		((uint16_t*)new_mem_blocks)[i] = 0;
-		// 	}
-		// }
-		// else
-		// {
-		// 	LOG_DBG("rx_samp wasn null");
-		// }
-		
-		/* Write Data */
-		// LOG_DBG("About to write to i2s tx buffer\n");
-		// printk("First value: %d\n", ((int16_t*)mem_blocks)[0]);
-		// printk("Second value: %d\n", ((int16_t*)mem_blocks)[1]);
-		printk("First three values from fifo = %d, %d, %d\n", rx_samp->data_buffer[0], rx_samp->data_buffer[1], rx_samp->data_buffer[2]);
 		int ret = i2s_buf_write(i2s_dev, &rx_samp->data_buffer, BLOCK_SIZE);
-		// LOG_DBG("Wrote to i2s tx buffer\n");
+
 		if (ret < 0) {
 			printk("Error: i2s_write failed with %d\n", ret);
 			//! Handle this better - should be able to restart the i2s transmission
-			// return;
 		}
-		// LOG_DBG("Before free");
+
 		// k_free(rx_samp);
-		// LOG_DBG("After free");
-		// LOG_DBG("Wrote data");
 	}
 }
 	
@@ -187,22 +157,16 @@ void audio_receive()
 		// Place into FIFO if an input audio buffer is available
 		k_sem_take(&new_rx_audio_samps_sem, K_FOREVER);
 		sem_value -= 1;
-		
-		// if (sem_total % 10 == 0)
-		// {
-		// 	LOG_DBG("taking: sem_k = %d\n", sem_value);
-		// }
 
 		audio_data_t *rx_data = &fifo_memory[idx_fifo_memory_write];
 		if (rx_data != NULL)
 		{
 			for(int i = 0; i < NUM_AUDIO_BLOCKS_FIFO * NUM_SAMPLES; i++)
 			{
-				// rx_data->data_buffer[i] = data_frame[i % NUM_SAMPLES];
 				rx_data->data_buffer[i] = big_count;
 				big_count = (big_count + 1) % 10000;
 			}
-			// printk("First three values into fifo = %d, %d, %d\n", rx_data->data_buffer[0], rx_data->data_buffer[1], rx_data->data_buffer[2]);
+
 			k_fifo_put(&rx_samples_fifo, rx_data);
 			idx_fifo_memory_write = (idx_fifo_memory_write + 1) % FIFO_MEM_SIZE;
 			fifo_count++;
@@ -213,14 +177,9 @@ void audio_receive()
 	
 static void pack_fifo_isr(struct k_timer *dummy)
 {
-	// LOG_DBG("pack_fifo_isr");
 	k_sem_give(&new_rx_audio_samps_sem);
 	sem_value += 1;
 	sem_total += 1;
-	// if (sem_total % 10 == 0)
-	// {
-	// 	LOG_DBG("giving: sem_k = %d with total of %d\n", sem_value, sem_total);
-	// }
 }
 
 /* Timer for filling of FIFO buffer */
