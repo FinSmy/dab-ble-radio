@@ -19,6 +19,14 @@ static int16_t data_frame[NUM_SAMPLES] = {
 	-23170, -18205, -12540,  -6393,     -1,
 };
 
+// In case transmission must be restarted or if data is not received in time
+static int16_t zero_frame[2 * NUM_SAMPLES] = {
+	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+};
+
 /* The size of the memory block should be a multiple of data_frame size */
 #define BLOCK_SIZE (2 * sizeof(data_frame))
 
@@ -134,14 +142,20 @@ void write_to_i2s_buffer()
 	{
 		// Get audio samples out of FIFO
 		audio_data_t *rx_samp = k_malloc(sizeof(audio_data_t)); // Should be using k_aligned_alloc?
-		rx_samp = k_fifo_get(&rx_samples_fifo, K_FOREVER);
+		rx_samp = k_fifo_get(&rx_samples_fifo, K_NO_WAIT);
 		fifo_count--;
 
 		int ret = i2s_buf_write(i2s_dev, &rx_samp->data_buffer, BLOCK_SIZE);
 
 		if (ret < 0) {
-			printk("Error: i2s_write failed with %d\n", ret);
-			//! Handle this better - should be able to restart the i2s transmission
+			LOG_ERR("Error: i2s_write failed with %d\n", ret);
+			
+			// Attempt to restart i2s transmission
+			i2s_trigger(i2s_dev, I2S_DIR_TX, I2S_TRIGGER_PREPARE);
+			int ret = i2s_buf_write(i2s_dev, &zero_frame, BLOCK_SIZE);
+			if (ret < 0) {
+				LOG_ERR("Issue in restarting i2s transmission");
+			}
 		}
 
 		// k_free(rx_samp);
