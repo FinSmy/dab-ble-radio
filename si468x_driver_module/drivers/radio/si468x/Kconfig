@@ -1,0 +1,7 @@
+config SI468X
+	bool "Custom SI468X Driver"
+	default n
+	depends on DT_HAS_ZEPHYR_SI468X_ENABLED
+	select SPI
+	help
+	  Enable SI468X driver

@@ -1,0 +1,5 @@
+description: Skyworks si468x DAB/FM RDS receiver and decoder
+
+compatible: "zephyr,si468x"
+
+include: [spi-device.yaml]

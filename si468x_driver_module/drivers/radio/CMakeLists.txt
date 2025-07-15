@@ -1,0 +1,1 @@
+add_subdirectory_ifdef(CONFIG_SI468X custom_si468x)
