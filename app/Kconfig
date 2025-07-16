@@ -1,0 +1,10 @@
+menu "Zephyr"
+source "Kconfig.zephyr"
+endmenu
+
+config RADIO
+    bool "Enable the use of radio modules"
+
+# module = APP
+# module-str = APP
+# source "subsys/logging/Kconfig.template.log_config"
