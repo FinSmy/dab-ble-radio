@@ -7,4 +7,4 @@ list(APPEND EXTRA_ZEPHYR_MODULES
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(dab_ble_radio LANGUAGES C)
 
-target_sources(dab_ble_radio PRIVATE src/main.c)
+target_sources(app PRIVATE src/main.c)
