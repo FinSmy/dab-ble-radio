@@ -106,6 +106,7 @@ i2s_tx: &i2s0 {
 	};
 };
 
+// miso is using conflicting pin - see what I can change it to
 &pinctrl {
 	spi1_default: spi1_default {
 		group1 {
